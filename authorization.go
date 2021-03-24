@@ -28,7 +28,7 @@ type authorization struct {
 	Username_ string // quoted
 }
 
-func newAuthorization(dr *DigestRequest) (*authorization, error) {
+func newAuthorization(dr *DigestTransport) (*authorization, error) {
 
 	ah := authorization{
 		Algorithm: dr.Wa.Algorithm,
@@ -55,7 +55,7 @@ const (
 	algorithmSHA256Sess = "SHA-256-SESS"
 )
 
-func (ah *authorization) refreshAuthorization(dr *DigestRequest) (*authorization, error) {
+func (ah *authorization) refreshAuthorization(dr *DigestTransport) (*authorization, error) {
 
 	ah.Username = dr.Username
 
@@ -78,7 +78,7 @@ func (ah *authorization) refreshAuthorization(dr *DigestRequest) (*authorization
 	return ah, nil
 }
 
-func (ah *authorization) computeResponse(dr *DigestRequest) (s string) {
+func (ah *authorization) computeResponse(dr *DigestTransport) (s string) {
 
 	kdSecret := ah.hash(ah.computeA1(dr))
 	kdData := fmt.Sprintf("%s:%08x:%s:%s:%s", ah.Nonce, ah.Nc, ah.Cnonce, ah.Qop, ah.hash(ah.computeA2(dr)))
@@ -86,7 +86,7 @@ func (ah *authorization) computeResponse(dr *DigestRequest) (s string) {
 	return ah.hash(fmt.Sprintf("%s:%s", kdSecret, kdData))
 }
 
-func (ah *authorization) computeA1(dr *DigestRequest) string {
+func (ah *authorization) computeA1(dr *DigestTransport) string {
 
 	algorithm := strings.ToUpper(ah.Algorithm)
 
@@ -102,7 +102,7 @@ func (ah *authorization) computeA1(dr *DigestRequest) string {
 	return ""
 }
 
-func (ah *authorization) computeA2(dr *DigestRequest) string {
+func (ah *authorization) computeA2(dr *DigestTransport) string {
 
 	if strings.Contains(dr.Wa.Qop, "auth-int") {
 		ah.Qop = "auth-int"
