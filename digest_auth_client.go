@@ -2,17 +2,19 @@ package digest_auth_client
 
 import (
 	"bytes"
-	"crypto/tls"
 	"fmt"
 	"net/http"
-	"time"
+	"sync"
+	"io"
 )
 
 type DigestTransport struct {
-	Password  string
-	Username  string
-	Auth      *authorization
-	Wa        *wwwAuthenticate
+	password  string
+	username  string
+	auth      *authorization
+	authmux   sync.Mutex
+	wa        *wwwAuthenticate
+	wamux     sync.RWMutex
 	transport http.RoundTripper
 }
 
@@ -26,11 +28,27 @@ func NewRequest(username, password string, transport http.RoundTripper) *DigestT
 	}
 }
 
+func (dt *DigestTransport) getWA() *wwwAuthenticate {
+	dt.wamux.RLock()
+	defer dt.wamux.RUnlock()
+	return dt.wa
+}
+
+func (dt *DigestTransport) setWA(wa *wwwAuthenticate) {
+	dt.wamux.Lock()
+	defer dt.wamux.Unlock()
+	dt.wa = wa
+}
+
 // Execute initialise the request and get a response
 func (dt *DigestTransport) RoundTrip(req *http.Request) (resp *http.Response, err error) {
 
-	if dt.Auth != nil {
-		return dr.executeExistingDigest(req)
+	dt.authmux.Lock()
+	auth := dt.auth
+	dt.authmux.Unlock()
+
+	if auth != nil {
+		return dt.executeExistingDigest(req)
 	}
 
 	reqCopy := req.Clone(req.Context())
@@ -47,7 +65,7 @@ func (dt *DigestTransport) RoundTrip(req *http.Request) (resp *http.Response, er
 	}
 
 	// fire first request
-	if resp, err = tr.Transport.RoundTrip(reqCopy); err != nil {
+	if resp, err = dt.transport.RoundTrip(reqCopy); err != nil {
 		return nil, err
 	}
 
@@ -63,7 +81,7 @@ func (dt *DigestTransport) RoundTrip(req *http.Request) (resp *http.Response, er
 				reqCopy.Body = newBody
 			}
 		}
-		return dr.executeNewDigest(reqCopy, resp)
+		return dt.executeNewDigest(reqCopy, resp)
 	}
 
 	return resp, nil
@@ -80,9 +98,9 @@ func (dt *DigestTransport) executeNewDigest(req *http.Request, resp *http.Respon
 		return nil, fmt.Errorf("failed to get WWW-Authenticate header, please check your server configuration")
 	}
 	wa = newWwwAuthenticate(waString)
-	dt.Wa = wa
+	dt.setWA(wa)
 
-	if auth, err = newAuthorization(dt); err != nil {
+	if auth, err = newAuthorization(wa, dt.username, dt.password, req); err != nil {
 		return nil, err
 	}
 
@@ -90,19 +108,24 @@ func (dt *DigestTransport) executeNewDigest(req *http.Request, resp *http.Respon
 		return nil, err
 	}
 
-	dt.Auth = auth
+	dt.authmux.Lock()
+	dt.auth = auth
+	dt.authmux.Unlock()
 	return resp2, nil
 }
 
 func (dt *DigestTransport) executeExistingDigest(req *http.Request) (resp *http.Response, err error) {
+	dt.authmux.Lock()
 	var auth *authorization
 
-	if auth, err = dt.Auth.refreshAuthorization(dt); err != nil {
+	if auth, err = dt.auth.refreshAuthorization(req); err != nil {
+		dt.authmux.Unlock()
 		return nil, err
 	}
-	dt.Auth = auth
+	dt.auth = auth
+	dt.authmux.Unlock()
 
-	return dr.executeRequest(req, dr.Auth.toString())
+	return dt.executeRequest(req, auth.toString())
 }
 
 func (dt *DigestTransport) executeRequest(req *http.Request, authString string) (resp *http.Response, err error) {

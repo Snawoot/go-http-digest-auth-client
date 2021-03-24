@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"net/url"
 	"strings"
 	"time"
+	"net/http"
 )
 
 type authorization struct {
@@ -25,27 +25,29 @@ type authorization struct {
 	URI       string // quoted
 	Userhash  bool   // quoted
 	Username  string // quoted
+	Password  string
 	Username_ string // quoted
 }
 
-func newAuthorization(dr *DigestTransport) (*authorization, error) {
+func newAuthorization(wa *wwwAuthenticate, username, password string, req *http.Request) (*authorization, error) {
 
 	ah := authorization{
-		Algorithm: dr.Wa.Algorithm,
+		Algorithm: wa.Algorithm,
 		Cnonce:    "",
 		Nc:        0,
-		Nonce:     dr.Wa.Nonce,
-		Opaque:    dr.Wa.Opaque,
+		Nonce:     wa.Nonce,
+		Opaque:    wa.Opaque,
 		Qop:       "",
-		Realm:     dr.Wa.Realm,
+		Realm:     wa.Realm,
 		Response:  "",
 		URI:       "",
-		Userhash:  dr.Wa.Userhash,
-		Username:  "",
+		Userhash:  wa.Userhash,
+		Username:  username,
+		Password:  password,
 		Username_: "", // TODO
 	}
 
-	return ah.refreshAuthorization(dr)
+	return ah.refreshAuthorization(req)
 }
 
 const (
@@ -55,9 +57,7 @@ const (
 	algorithmSHA256Sess = "SHA-256-SESS"
 )
 
-func (ah *authorization) refreshAuthorization(dr *DigestTransport) (*authorization, error) {
-
-	ah.Username = dr.Username
+func (ah *authorization) refreshAuthorization(req *http.Request) (*authorization, error) {
 
 	if ah.Userhash {
 		ah.Username = ah.hash(fmt.Sprintf("%s:%s", ah.Username, ah.Realm))
@@ -65,45 +65,42 @@ func (ah *authorization) refreshAuthorization(dr *DigestTransport) (*authorizati
 
 	ah.Nc++
 
-	ah.Cnonce = ah.hash(fmt.Sprintf("%d:%s:my_value", time.Now().UnixNano(), dr.Username))
+	ah.Cnonce = ah.hash(fmt.Sprintf("%d:%s:my_value", time.Now().UnixNano(), ah.Username))
 
-	url, err := url.Parse(dr.URI)
-	if err != nil {
-		return nil, err
-	}
-
-	ah.URI = url.RequestURI()
-	ah.Response = ah.computeResponse(dr)
+	ah.URI = req.URL.RequestURI()
+	ah.Response = ah.computeResponse(req)
 
 	return ah, nil
 }
 
-func (ah *authorization) computeResponse(dr *DigestTransport) (s string) {
+func (ah *authorization) computeResponse(req *http.Request) (s string) {
 
-	kdSecret := ah.hash(ah.computeA1(dr))
-	kdData := fmt.Sprintf("%s:%08x:%s:%s:%s", ah.Nonce, ah.Nc, ah.Cnonce, ah.Qop, ah.hash(ah.computeA2(dr)))
+	kdSecret := ah.hash(ah.computeA1())
+	kdData := fmt.Sprintf("%s:%08x:%s:%s:%s", ah.Nonce, ah.Nc, ah.Cnonce, ah.Qop, ah.hash(ah.computeA2(req)))
 
 	return ah.hash(fmt.Sprintf("%s:%s", kdSecret, kdData))
 }
 
-func (ah *authorization) computeA1(dr *DigestTransport) string {
+func (ah *authorization) computeA1() string {
 
 	algorithm := strings.ToUpper(ah.Algorithm)
 
 	if algorithm == "" || algorithm == algorithmMD5 || algorithm == algorithmSHA256 {
-		return fmt.Sprintf("%s:%s:%s", ah.Username, ah.Realm, dr.Password)
+		return fmt.Sprintf("%s:%s:%s", ah.Username, ah.Realm, ah.Password)
 	}
 
 	if algorithm == algorithmMD5Sess || algorithm == algorithmSHA256Sess {
-		upHash := ah.hash(fmt.Sprintf("%s:%s:%s", ah.Username, ah.Realm, dr.Password))
+		upHash := ah.hash(fmt.Sprintf("%s:%s:%s", ah.Username, ah.Realm, ah.Password))
 		return fmt.Sprintf("%s:%s:%s", upHash, ah.Nonce, ah.Cnonce)
 	}
 
 	return ""
 }
 
-func (ah *authorization) computeA2(dr *DigestTransport) string {
+func (ah *authorization) computeA2(req *http.Request) string {
 
+	// TODO: copy entire body and hash it
+	/*
 	if strings.Contains(dr.Wa.Qop, "auth-int") {
 		ah.Qop = "auth-int"
 		return fmt.Sprintf("%s:%s:%s", dr.Method, ah.URI, ah.hash(dr.Body))
@@ -115,6 +112,8 @@ func (ah *authorization) computeA2(dr *DigestTransport) string {
 	}
 
 	return ""
+	*/
+	return fmt.Sprintf("%s:%s", req.Method, ah.URI)
 }
 
 func (ah *authorization) hash(a string) string {
