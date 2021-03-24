@@ -19,7 +19,7 @@ type DigestTransport struct {
 }
 
 // NewRequest creates a new DigestTransport object
-func NewRequest(username, password string, transport http.RoundTripper) *DigestTransport {
+func NewDigestTransport(username, password string, transport http.RoundTripper) *DigestTransport {
 	return &DigestTransport{
 		username:  username,
 		password:  password,
