@@ -8,43 +8,43 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"net/http"
 	"strings"
 	"time"
-	"net/http"
 )
 
 type authorization struct {
-	Algorithm string // unquoted
-	Cnonce    string // quoted
-	Nc        int    // unquoted
-	Nonce     string // quoted
-	Opaque    string // quoted
-	Qop       string // unquoted
-	Realm     string // quoted
-	Response  string // quoted
-	URI       string // quoted
-	Userhash  bool   // quoted
-	Username  string // quoted
-	Password  string
-	Username_ string // quoted
+	Algorithm      string // unquoted
+	Cnonce         string // quoted
+	Nc             int    // unquoted
+	Nonce          string // quoted
+	Opaque         string // quoted
+	Qop            string // unquoted
+	Realm          string // quoted
+	Response       string // quoted
+	URI            string // quoted
+	Userhash       bool   // quoted
+	Username       string // quoted
+	Password       string
+	UsernameHashed string // quoted
 }
 
 func newAuthorization(wa *wwwAuthenticate, username, password string, req *http.Request) (*authorization, error) {
 
 	ah := authorization{
-		Algorithm: wa.Algorithm,
-		Cnonce:    "",
-		Nc:        0,
-		Nonce:     wa.Nonce,
-		Opaque:    wa.Opaque,
-		Qop:       "",
-		Realm:     wa.Realm,
-		Response:  "",
-		URI:       "",
-		Userhash:  wa.Userhash,
-		Username:  username,
-		Password:  password,
-		Username_: "", // TODO
+		Algorithm:      wa.Algorithm,
+		Cnonce:         "",
+		Nc:             0,
+		Nonce:          wa.Nonce,
+		Opaque:         wa.Opaque,
+		Qop:            "",
+		Realm:          wa.Realm,
+		Response:       "",
+		URI:            "",
+		Userhash:       wa.Userhash,
+		Username:       username,
+		Password:       password,
+		UsernameHashed: "",
 	}
 
 	return ah.refreshAuthorization(req)
@@ -60,7 +60,7 @@ const (
 func (ah *authorization) refreshAuthorization(req *http.Request) (*authorization, error) {
 
 	if ah.Userhash {
-		ah.Username = ah.hash(fmt.Sprintf("%s:%s", ah.Username, ah.Realm))
+		ah.UsernameHashed = ah.hash(fmt.Sprintf("%s:%s", ah.Username, ah.Realm))
 	}
 
 	ah.Nc++
@@ -101,17 +101,17 @@ func (ah *authorization) computeA2(req *http.Request) string {
 
 	// TODO: copy entire body and hash it
 	/*
-	if strings.Contains(dr.Wa.Qop, "auth-int") {
-		ah.Qop = "auth-int"
-		return fmt.Sprintf("%s:%s:%s", dr.Method, ah.URI, ah.hash(dr.Body))
-	}
+		if strings.Contains(dr.Wa.Qop, "auth-int") {
+			ah.Qop = "auth-int"
+			return fmt.Sprintf("%s:%s:%s", dr.Method, ah.URI, ah.hash(dr.Body))
+		}
 
-	if dr.Wa.Qop == "auth" || dr.Wa.Qop == "" {
-		ah.Qop = "auth"
-		return fmt.Sprintf("%s:%s", dr.Method, ah.URI)
-	}
+		if dr.Wa.Qop == "auth" || dr.Wa.Qop == "" {
+			ah.Qop = "auth"
+			return fmt.Sprintf("%s:%s", dr.Method, ah.URI)
+		}
 
-	return ""
+		return ""
 	*/
 	return fmt.Sprintf("%s:%s", req.Method, ah.URI)
 }
@@ -138,7 +138,9 @@ func (ah *authorization) toString() string {
 
 	buffer.WriteString("Digest ")
 
-	if ah.Username != "" {
+	if ah.Userhash {
+		buffer.WriteString(fmt.Sprintf("username=\"%s\", ", ah.UsernameHashed))
+	} else {
 		buffer.WriteString(fmt.Sprintf("username=\"%s\", ", ah.Username))
 	}
 

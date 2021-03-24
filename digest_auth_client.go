@@ -3,9 +3,9 @@ package digest_auth_client
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 	"sync"
-	"io"
 )
 
 type DigestTransport struct {
@@ -18,12 +18,11 @@ type DigestTransport struct {
 	transport http.RoundTripper
 }
 
-
 // NewRequest creates a new DigestTransport object
 func NewRequest(username, password string, transport http.RoundTripper) *DigestTransport {
 	return &DigestTransport{
-		username: username,
-		password: password,
+		username:  username,
+		password:  password,
 		transport: transport,
 	}
 }
@@ -72,6 +71,7 @@ func (dt *DigestTransport) RoundTrip(req *http.Request) (resp *http.Response, er
 	if resp.StatusCode == 401 {
 		if req.Body != nil {
 			if req.GetBody == nil {
+				// TODO: rewind bodyRead
 				reqCopy.Body = io.NopCloser(io.MultiReader(bodyRead, bodyLeft))
 			} else {
 				newBody, err := req.GetBody()
