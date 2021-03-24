@@ -55,7 +55,7 @@ func (dt *DigestTransport) RoundTrip(req *http.Request) (resp *http.Response, er
 		defer req.Body.Close()
 	}
 
-	var bodyRead io.ReadWriter
+	var bodyRead *bytes.Buffer
 	var bodyLeft io.Reader
 	if req.Body != nil && req.GetBody == nil {
 		bodyRead = new(bytes.Buffer)
@@ -71,7 +71,6 @@ func (dt *DigestTransport) RoundTrip(req *http.Request) (resp *http.Response, er
 	if resp.StatusCode == 401 {
 		if req.Body != nil {
 			if req.GetBody == nil {
-				// TODO: rewind bodyRead
 				reqCopy.Body = io.NopCloser(io.MultiReader(bodyRead, bodyLeft))
 			} else {
 				newBody, err := req.GetBody()
