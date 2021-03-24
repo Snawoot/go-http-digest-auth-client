@@ -99,21 +99,25 @@ func (ah *authorization) computeA1() string {
 
 func (ah *authorization) computeA2(req *http.Request) string {
 
-	// TODO: copy entire body and hash it
-	/*
-		if strings.Contains(dr.Wa.Qop, "auth-int") {
-			ah.Qop = "auth-int"
-			return fmt.Sprintf("%s:%s:%s", dr.Method, ah.URI, ah.hash(dr.Body))
+	if strings.Contains(ah.Qop, "auth-int") {
+		h := ah.hash("")
+		if req.Body != nil {
+			buf := new(bytes.Buffer)
+			// TODO: handle reading error
+			buf.ReadFrom(req.Body)
+			h = ah.hash(buf.String())
+			req.Body = io.NopCloser(bytes.NewReader(buf.Bytes()))
 		}
+		ah.Qop = "auth-int"
+		return fmt.Sprintf("%s:%s:%s", req.Method, ah.URI, h)
+	}
 
-		if dr.Wa.Qop == "auth" || dr.Wa.Qop == "" {
-			ah.Qop = "auth"
-			return fmt.Sprintf("%s:%s", dr.Method, ah.URI)
-		}
+	if ah.Qop == "auth" || ah.Qop == "" {
+		ah.Qop = "auth"
+		return fmt.Sprintf("%s:%s", req.Method, ah.URI)
+	}
 
-		return ""
-	*/
-	return fmt.Sprintf("%s:%s", req.Method, ah.URI)
+	return ""
 }
 
 func (ah *authorization) hash(a string) string {
