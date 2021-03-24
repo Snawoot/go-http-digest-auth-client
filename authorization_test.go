@@ -1,6 +1,11 @@
 package digest_auth_client
 
-import "testing"
+import (
+	"bytes"
+	"io"
+	"net/http"
+	"testing"
+)
 
 func TestHash(t *testing.T) {
 	testCases := []struct {
@@ -101,15 +106,15 @@ func TestComputeA1(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			dr := &DigestRequest{Password: "secret"}
 			ah := &authorization{
 				Algorithm: tc.algorithm,
 				Nonce:     "nonce",
 				Cnonce:    "cnonce",
 				Username:  "username",
+				Password:  "secret",
 				Realm:     "realm",
 			}
-			res := ah.computeA1(dr)
+			res := ah.computeA1()
 			if res != tc.expRes {
 				t.Errorf("got: %q, want: %q", res, tc.expRes)
 			}
@@ -146,12 +151,9 @@ func TestComputeA2(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			dr := &DigestRequest{
+			dr := &http.Request{
 				Method: "method",
-				Body:   "body",
-				Wa: &wwwAuthenticate{
-					Qop: tc.qop,
-				},
+				Body:   io.NopCloser(bytes.NewBufferString("body")),
 			}
 			ah := &authorization{
 				Algorithm: "MD5",

@@ -1,10 +1,5 @@
 # go-http-digest-auth-client
 
-
-> **Due to time limit on my side I won't be able to maintain this package. Please consider using
-> some other library like https://github.com/rkl-/digest. Thanks for your support!**
-
-
 Golang Http Digest Authentication Client
 
 This client implements [RFC7616 HTTP Digest Access Authentication](https://www.rfc-editor.org/rfc/rfc7616.txt)
@@ -12,38 +7,42 @@ and by now the basic features should work.
 
 # Usage
 
-```go
-// import
-import dac "github.com/xinsnake/go-http-digest-auth-client"
-
-// create a new digest authentication request
-dr := dac.NewRequest(username, password, method, uri, payload)
-response1, err := dr.Execute()
-
-// check error, get response
-
-// reuse the existing digest authentication request so no extra request is needed
-dr.UpdateRequest(username, password, method, uri, payload)
-response2, err := dr.Execute()
-
-// check error, get response
-```
-
-Or you can use it with `http.Request`
+Complete example from E2E test:
 
 ```go
-t := dac.NewTransport(username, password)
-req, err := http.NewRequest(method, uri, payload)
 
-if err != nil {
-    log.Fatalln(err)
+package main
+
+import (
+	"fmt"
+	"io/ioutil"
+	"log"
+	"net/http"
+
+	dac "github.com/Snawoot/go-http-digest-auth-client"
+)
+
+const (
+	username = "test"
+	password = "test123"
+	uri      = "http://172.16.1.5"
+)
+
+func main() {
+	client := &http.Client{
+		Transport: dac.NewDigestTransport(username, password, http.DefaultTransport),
+	}
+
+	resp, err := client.Get(uri)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	fmt.Printf(string(body))
 }
-
-resp, err := t.RoundTrip(req)
-if err != nil {
-    log.Fatalln(err)
-}
-defer resp.Body.Close()
-
-fmt.Println(resp)
 ```

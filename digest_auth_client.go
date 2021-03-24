@@ -2,173 +2,132 @@ package digest_auth_client
 
 import (
 	"bytes"
-	"crypto/tls"
 	"fmt"
+	"io"
 	"net/http"
-	"time"
+	"sync"
 )
 
-type DigestRequest struct {
-	Body       string
-	Method     string
-	Password   string
-	URI        string
-	Username   string
-	Header     http.Header
-	Auth       *authorization
-	Wa         *wwwAuthenticate
-	CertVal    bool
-	HTTPClient *http.Client
-}
-
 type DigestTransport struct {
-	Password   string
-	Username   string
-	HTTPClient *http.Client
+	password  string
+	username  string
+	auth      *authorization
+	authmux   sync.Mutex
+	wa        *wwwAuthenticate
+	wamux     sync.RWMutex
+	transport http.RoundTripper
 }
 
-// NewRequest creates a new DigestRequest object
-func NewRequest(username, password, method, uri, body string) DigestRequest {
-	dr := DigestRequest{}
-	dr.UpdateRequest(username, password, method, uri, body)
-	dr.CertVal = true
-	return dr
-}
-
-// NewTransport creates a new DigestTransport object
-func NewTransport(username, password string) DigestTransport {
-	dt := DigestTransport{}
-	dt.Password = password
-	dt.Username = username
-	return dt
-}
-
-func (dr *DigestRequest) getHTTPClient() *http.Client {
-	if dr.HTTPClient != nil {
-		return dr.HTTPClient
-	}
-	tlsConfig := tls.Config{}
-	if !dr.CertVal {
-		tlsConfig.InsecureSkipVerify = true
-	}
-
-	return &http.Client{
-		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tlsConfig,
-		},
+// NewRequest creates a new DigestTransport object
+func NewDigestTransport(username, password string, transport http.RoundTripper) *DigestTransport {
+	return &DigestTransport{
+		username:  username,
+		password:  password,
+		transport: transport,
 	}
 }
 
-// UpdateRequest is called when you want to reuse an existing
-//  DigestRequest connection with new request information
-func (dr *DigestRequest) UpdateRequest(username, password, method, uri, body string) *DigestRequest {
-	dr.Body = body
-	dr.Method = method
-	dr.Password = password
-	dr.URI = uri
-	dr.Username = username
-	dr.Header = make(map[string][]string)
-	return dr
+func (dt *DigestTransport) getWA() *wwwAuthenticate {
+	dt.wamux.RLock()
+	defer dt.wamux.RUnlock()
+	return dt.wa
 }
 
-// RoundTrip implements the http.RoundTripper interface
-func (dt *DigestTransport) RoundTrip(req *http.Request) (resp *http.Response, err error) {
-	username := dt.Username
-	password := dt.Password
-	method := req.Method
-	uri := req.URL.String()
-
-	var body string
-	if req.Body != nil {
-		buf := new(bytes.Buffer)
-		buf.ReadFrom(req.Body)
-		body = buf.String()
-	}
-
-	dr := NewRequest(username, password, method, uri, body)
-	if dt.HTTPClient != nil {
-		dr.HTTPClient = dt.HTTPClient
-	}
-
-	return dr.Execute()
+func (dt *DigestTransport) setWA(wa *wwwAuthenticate) {
+	dt.wamux.Lock()
+	defer dt.wamux.Unlock()
+	dt.wa = wa
 }
 
 // Execute initialise the request and get a response
-func (dr *DigestRequest) Execute() (resp *http.Response, err error) {
+func (dt *DigestTransport) RoundTrip(req *http.Request) (resp *http.Response, err error) {
 
-	if dr.Auth != nil {
-		return dr.executeExistingDigest()
+	dt.authmux.Lock()
+	auth := dt.auth
+	dt.authmux.Unlock()
+
+	if auth != nil {
+		return dt.executeExistingDigest(req)
 	}
 
-	var req *http.Request
-	if req, err = http.NewRequest(dr.Method, dr.URI, bytes.NewReader([]byte(dr.Body))); err != nil {
-		return nil, err
+	reqCopy := req.Clone(req.Context())
+	if req.Body != nil {
+		defer req.Body.Close()
 	}
-	req.Header = dr.Header
 
-	client := dr.getHTTPClient()
+	var bodyRead *bytes.Buffer
+	var bodyLeft io.Reader
+	if req.Body != nil && req.GetBody == nil {
+		bodyRead = new(bytes.Buffer)
+		bodyLeft = io.TeeReader(req.Body, bodyRead)
+		reqCopy.Body = io.NopCloser(bodyLeft)
+	}
 
-	if resp, err = client.Do(req); err != nil {
+	// fire first request
+	if resp, err = dt.transport.RoundTrip(reqCopy); err != nil {
 		return nil, err
 	}
 
 	if resp.StatusCode == 401 {
-		return dr.executeNewDigest(resp)
+		if req.Body != nil {
+			if req.GetBody == nil {
+				reqCopy.Body = io.NopCloser(io.MultiReader(bodyRead, bodyLeft))
+			} else {
+				newBody, err := req.GetBody()
+				if err != nil {
+					return nil, err
+				}
+				reqCopy.Body = newBody
+			}
+		}
+		return dt.executeNewDigest(reqCopy, resp)
 	}
 
-	// return the resp to user to handle resp.body.Close()
 	return resp, nil
 }
 
-func (dr *DigestRequest) executeNewDigest(resp *http.Response) (resp2 *http.Response, err error) {
+func (dt *DigestTransport) executeNewDigest(req *http.Request, resp *http.Response) (resp2 *http.Response, err error) {
 	var (
 		auth     *authorization
 		wa       *wwwAuthenticate
 		waString string
 	)
 
-	// body not required for authentication, closing
-	resp.Body.Close()
-
 	if waString = resp.Header.Get("WWW-Authenticate"); waString == "" {
 		return nil, fmt.Errorf("failed to get WWW-Authenticate header, please check your server configuration")
 	}
 	wa = newWwwAuthenticate(waString)
-	dr.Wa = wa
+	dt.setWA(wa)
 
-	if auth, err = newAuthorization(dr); err != nil {
+	if auth, err = newAuthorization(wa, dt.username, dt.password, req); err != nil {
 		return nil, err
 	}
 
-	if resp2, err = dr.executeRequest(auth.toString()); err != nil {
+	if resp2, err = dt.executeRequest(req, auth.toString()); err != nil {
 		return nil, err
 	}
 
-	dr.Auth = auth
+	dt.authmux.Lock()
+	dt.auth = auth
+	dt.authmux.Unlock()
 	return resp2, nil
 }
 
-func (dr *DigestRequest) executeExistingDigest() (resp *http.Response, err error) {
+func (dt *DigestTransport) executeExistingDigest(req *http.Request) (resp *http.Response, err error) {
+	dt.authmux.Lock()
 	var auth *authorization
 
-	if auth, err = dr.Auth.refreshAuthorization(dr); err != nil {
+	if auth, err = dt.auth.refreshAuthorization(req); err != nil {
+		dt.authmux.Unlock()
 		return nil, err
 	}
-	dr.Auth = auth
+	dt.auth = auth
+	dt.authmux.Unlock()
 
-	return dr.executeRequest(dr.Auth.toString())
+	return dt.executeRequest(req, auth.toString())
 }
 
-func (dr *DigestRequest) executeRequest(authString string) (resp *http.Response, err error) {
-	var req *http.Request
-
-	if req, err = http.NewRequest(dr.Method, dr.URI, bytes.NewReader([]byte(dr.Body))); err != nil {
-		return nil, err
-	}
-	req.Header = dr.Header
+func (dt *DigestTransport) executeRequest(req *http.Request, authString string) (resp *http.Response, err error) {
 	req.Header.Add("Authorization", authString)
-
-	client := dr.getHTTPClient()
-	return client.Do(req)
+	return dt.transport.RoundTrip(req)
 }
