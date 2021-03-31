@@ -108,8 +108,6 @@ func (dt *DigestTransport) tryReq(req *http.Request) (*http.Response, error) {
 		}
 	}
 
-	// TODO: improve WWW-Authenticate parsing and intercept only digest auth
-	// challenges
 	if resp.StatusCode != 401 {
 		return resp, nil
 	}
@@ -121,6 +119,10 @@ func (dt *DigestTransport) tryReq(req *http.Request) (*http.Response, error) {
 	wa, err = newWwwAuthenticate(waString)
 	if err != nil {
 		return nil, err
+	}
+
+	if wa.Type != "Digest" {
+		return resp, nil
 	}
 
 	auth, err = newAuthorization(wa, dt.username, dt.password, req)
