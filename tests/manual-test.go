@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"time"
 
 	dac "github.com/Snawoot/go-http-digest-auth-client"
 )
@@ -30,5 +31,20 @@ func main() {
 		log.Fatalln(err)
 	}
 
-	fmt.Printf(string(body))
+	fmt.Println(string(body))
+
+	// Sleep double nonce expiration interval
+	time.Sleep(10*time.Second)
+
+	resp, err = client.Get(uri)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	body, err = ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	fmt.Println(string(body))
 }

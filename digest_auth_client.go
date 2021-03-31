@@ -2,7 +2,7 @@ package digest_auth_client
 
 import (
 	"bytes"
-	"fmt"
+	"errors"
 	"io"
 	"net/http"
 	"sync"
@@ -13,10 +13,12 @@ type DigestTransport struct {
 	username  string
 	auth      *authorization
 	authmux   sync.Mutex
-	wa        *wwwAuthenticate
-	wamux     sync.RWMutex
 	transport http.RoundTripper
 }
+
+var (
+	AuthRetryNeeded = errors.New("retry request with authentication")
+)
 
 // NewRequest creates a new DigestTransport object
 func NewDigestTransport(username, password string, transport http.RoundTripper) *DigestTransport {
@@ -27,29 +29,8 @@ func NewDigestTransport(username, password string, transport http.RoundTripper) 
 	}
 }
 
-func (dt *DigestTransport) getWA() *wwwAuthenticate {
-	dt.wamux.RLock()
-	defer dt.wamux.RUnlock()
-	return dt.wa
-}
-
-func (dt *DigestTransport) setWA(wa *wwwAuthenticate) {
-	dt.wamux.Lock()
-	defer dt.wamux.Unlock()
-	dt.wa = wa
-}
-
 // Execute initialise the request and get a response
 func (dt *DigestTransport) RoundTrip(req *http.Request) (resp *http.Response, err error) {
-
-	dt.authmux.Lock()
-	auth := dt.auth
-	dt.authmux.Unlock()
-
-	if auth != nil {
-		return dt.executeExistingDigest(req)
-	}
-
 	reqCopy := req.Clone(req.Context())
 	if req.Body != nil {
 		defer req.Body.Close()
@@ -64,70 +45,90 @@ func (dt *DigestTransport) RoundTrip(req *http.Request) (resp *http.Response, er
 	}
 
 	// fire first request
-	if resp, err = dt.transport.RoundTrip(reqCopy); err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode == 401 {
-		if req.Body != nil {
-			if req.GetBody == nil {
-				reqCopy.Body = io.NopCloser(io.MultiReader(bodyRead, bodyLeft))
-			} else {
-				newBody, err := req.GetBody()
-				if err != nil {
-					return nil, err
+	if resp, err = dt.tryReq(reqCopy); err != nil {
+		if err == AuthRetryNeeded {
+			// rearm request body and retry with new auth
+			if req.Body != nil {
+				if req.GetBody == nil {
+					reqCopy.Body = io.NopCloser(io.MultiReader(bodyRead, bodyLeft))
+				} else {
+					newBody, err := req.GetBody()
+					if err != nil {
+						return nil, err
+					}
+					reqCopy.Body = newBody
 				}
-				reqCopy.Body = newBody
 			}
+			return dt.tryReq(reqCopy)
+		} else {
+			return nil, err
 		}
-		return dt.executeNewDigest(reqCopy, resp)
+	} else {
+		return resp, nil
 	}
-
-	return resp, nil
 }
 
-func (dt *DigestTransport) executeNewDigest(req *http.Request, resp *http.Response) (resp2 *http.Response, err error) {
+func (dt *DigestTransport) tryReq(req *http.Request) (*http.Response, error) {
 	var (
 		auth     *authorization
 		wa       *wwwAuthenticate
 		waString string
+		err      error
+		resp     *http.Response
 	)
 
-	if waString = resp.Header.Get("WWW-Authenticate"); waString == "" {
-		return nil, fmt.Errorf("failed to get WWW-Authenticate header, please check your server configuration")
-	}
-	wa = newWwwAuthenticate(waString)
-	dt.setWA(wa)
-
-	if auth, err = newAuthorization(wa, dt.username, dt.password, req); err != nil {
-		return nil, err
-	}
-
-	if resp2, err = dt.executeRequest(req, auth.toString()); err != nil {
-		return nil, err
-	}
-
 	dt.authmux.Lock()
-	dt.auth = auth
-	dt.authmux.Unlock()
-	return resp2, nil
-}
 
-func (dt *DigestTransport) executeExistingDigest(req *http.Request) (resp *http.Response, err error) {
-	dt.authmux.Lock()
-	var auth *authorization
+	auth = dt.auth
 
-	if auth, err = dt.auth.refreshAuthorization(req); err != nil {
+	if auth != nil {
+		// Having existing auth
+		auth, err = dt.auth.refreshAuthorization(req)
+		if err != nil {
+			dt.authmux.Unlock()
+			return nil, err
+		}
+		dt.auth = auth
 		dt.authmux.Unlock()
+
+		resp, err = dt.executeAuthorizedRequest(req, auth.toString())
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		dt.authmux.Unlock()
+		// Never seen auth challenge from server
+		resp, err = dt.transport.RoundTrip(req)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// TODO: improve WWW-Authenticate parsing and intercept only digest auth
+	// challenges
+	if resp.StatusCode != 401 {
+		return resp, nil
+	}
+
+	if waString = resp.Header.Get("WWW-Authenticate"); waString == "" {
+		return resp, err
+	}
+
+	wa = newWwwAuthenticate(waString)
+
+	auth, err = newAuthorization(wa, dt.username, dt.password, req)
+	if err != nil {
 		return nil, err
 	}
+
+	dt.authmux.Lock()
 	dt.auth = auth
 	dt.authmux.Unlock()
 
-	return dt.executeRequest(req, auth.toString())
+	return nil, AuthRetryNeeded
 }
 
-func (dt *DigestTransport) executeRequest(req *http.Request, authString string) (resp *http.Response, err error) {
-	req.Header.Add("Authorization", authString)
+func (dt *DigestTransport) executeAuthorizedRequest(req *http.Request, authString string) (resp *http.Response, err error) {
+	req.Header.Set("Authorization", authString)
 	return dt.transport.RoundTrip(req)
 }
