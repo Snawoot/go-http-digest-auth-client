@@ -5,6 +5,8 @@ Golang Http Digest Authentication Client
 This client implements [RFC7616 HTTP Digest Access Authentication](https://www.rfc-editor.org/rfc/rfc7616.txt)
 and by now the basic features should work.
 
+This implementation presents pluggable HTTP transport with `http.RoundTripper` interface, stackable on top of other RoundTripper. DigestTransport intercepts server responses requiring Digest authentication and restarts them with Authentication header. Authentication challenge is reused whereever possible and it's expiration (server reject) is handled automatically.
+
 # Usage
 
 Complete example from E2E test:
