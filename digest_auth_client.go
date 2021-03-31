@@ -59,7 +59,11 @@ func (dt *DigestTransport) RoundTrip(req *http.Request) (resp *http.Response, er
 					reqCopy.Body = newBody
 				}
 			}
-			return dt.tryReq(reqCopy)
+			resp, err = dt.tryReq(reqCopy)
+			if err == AuthRetryNeeded {
+				return resp, nil
+			}
+			return resp, err
 		} else {
 			return nil, err
 		}
@@ -104,8 +108,6 @@ func (dt *DigestTransport) tryReq(req *http.Request) (*http.Response, error) {
 		}
 	}
 
-	// TODO: improve WWW-Authenticate parsing and intercept only digest auth
-	// challenges
 	if resp.StatusCode != 401 {
 		return resp, nil
 	}
@@ -114,7 +116,14 @@ func (dt *DigestTransport) tryReq(req *http.Request) (*http.Response, error) {
 		return resp, err
 	}
 
-	wa = newWwwAuthenticate(waString)
+	wa, err = newWwwAuthenticate(waString)
+	if err != nil {
+		return nil, err
+	}
+
+	if wa.Type != "Digest" {
+		return resp, nil
+	}
 
 	auth, err = newAuthorization(wa, dt.username, dt.password, req)
 	if err != nil {

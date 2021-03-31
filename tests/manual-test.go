@@ -34,7 +34,7 @@ func main() {
 	fmt.Println(string(body))
 
 	// Sleep double nonce expiration interval
-	time.Sleep(10*time.Second)
+	time.Sleep(10 * time.Second)
 
 	resp, err = client.Get(uri)
 	if err != nil {
