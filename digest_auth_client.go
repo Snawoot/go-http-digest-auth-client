@@ -59,7 +59,11 @@ func (dt *DigestTransport) RoundTrip(req *http.Request) (resp *http.Response, er
 					reqCopy.Body = newBody
 				}
 			}
-			return dt.tryReq(reqCopy)
+			resp, err = dt.tryReq(reqCopy)
+			if err == AuthRetryNeeded {
+				return resp, nil
+			}
+			return resp, err
 		} else {
 			return nil, err
 		}
