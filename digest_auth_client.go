@@ -118,7 +118,10 @@ func (dt *DigestTransport) tryReq(req *http.Request) (*http.Response, error) {
 		return resp, err
 	}
 
-	wa = newWwwAuthenticate(waString)
+	wa, err = newWwwAuthenticate(waString)
+	if err != nil {
+		return nil, err
+	}
 
 	auth, err = newAuthorization(wa, dt.username, dt.password, req)
 	if err != nil {
