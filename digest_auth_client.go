@@ -134,7 +134,7 @@ func (dt *DigestTransport) tryReq(req *http.Request) (*http.Response, error) {
 	dt.auth = auth
 	dt.authmux.Unlock()
 
-	return nil, AuthRetryNeeded
+	return resp, AuthRetryNeeded
 }
 
 func (dt *DigestTransport) executeAuthorizedRequest(req *http.Request, authString string) (resp *http.Response, err error) {
