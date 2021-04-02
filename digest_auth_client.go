@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"io/ioutil"
 	"net/http"
 	"sync"
 )
@@ -15,6 +16,10 @@ type DigestTransport struct {
 	authmux   sync.Mutex
 	transport http.RoundTripper
 }
+
+const (
+	READ_LIMIT int64 = 128 * 1024
+)
 
 var (
 	AuthRetryNeeded = errors.New("retry request with authentication")
@@ -47,6 +52,7 @@ func (dt *DigestTransport) RoundTrip(req *http.Request) (resp *http.Response, er
 	// fire first request
 	if resp, err = dt.tryReq(reqCopy); err != nil {
 		if err == AuthRetryNeeded {
+			cleanupBody(resp.Body)
 			// rearm request body and retry with new auth
 			if req.Body != nil {
 				if req.GetBody == nil {
@@ -140,4 +146,14 @@ func (dt *DigestTransport) tryReq(req *http.Request) (*http.Response, error) {
 func (dt *DigestTransport) executeAuthorizedRequest(req *http.Request, authString string) (resp *http.Response, err error) {
 	req.Header.Set("Authorization", authString)
 	return dt.transport.RoundTrip(req)
+}
+
+// Does cleanup of HTTP response in order to make it reusable by keep-alive
+// logic of HTTP transport
+func cleanupBody(body io.ReadCloser) {
+	io.Copy(ioutil.Discard, &io.LimitedReader{
+		R: body,
+		N: READ_LIMIT,
+	})
+	body.Close()
 }
